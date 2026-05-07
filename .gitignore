@@ -1,0 +1,18 @@
+# Vivado
+.cache/
+.gen/
+.hw/
+.ip_user_files/
+.runs/
+.sim/
+.Xil/
+
+# Logs
+*.jou
+*.log
+*.str
+*.wdb
+*.pb
+
+# Zip
+*.zip
