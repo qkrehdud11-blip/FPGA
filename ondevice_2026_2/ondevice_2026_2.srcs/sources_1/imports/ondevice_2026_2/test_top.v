@@ -782,10 +782,10 @@ module i2c_txtlcd_top(
     
     localparam IDLE                 = 6'b00_0001;
     localparam INIT                 = 6'b00_0010;
-    localparam SEND_CHARACTER       = 6'b00_0100;
+    localparam SEND_NUMBER          = 6'b00_0100;
     localparam SHIFT_RIGHT_DISPLAY  = 6'b00_1000;
     localparam SHIFT_LEFT_DISPLAY   = 6'b01_0000;
-    localparam SEND_ENGLISH         = 6'b10_0000;
+    localparam SEND_CHARACTER       = 6'b10_0000;
 
     
     reg [5:0] state, next_state;
@@ -795,12 +795,14 @@ module i2c_txtlcd_top(
     end
     
     reg init_flag;
-    reg [10:0] cnt_data;
+    reg [10:0] cnt_data, cnt_number, cnt_character;
     always @(posedge clk, posedge reset_p)begin
         if(reset_p)begin
             next_state = IDLE;
             init_flag = 0;
             cnt_data  = 0;
+            cnt_number = 0; 
+            cnt_character = 0;
             count_clk_e = 0;
             send = 0;
             send_buffer = 0;
@@ -810,10 +812,10 @@ module i2c_txtlcd_top(
             case(state)
                 IDLE               :begin
                     if(init_flag)begin
-                        if(btn_pedge[0])next_state = SEND_CHARACTER;
+                        if(btn_pedge[0])next_state = SEND_NUMBER;
                         if(btn_pedge[1])next_state = SHIFT_LEFT_DISPLAY;
                         if(btn_pedge[2])next_state = SHIFT_RIGHT_DISPLAY;
-                        if(btn_pedge[3])next_state = SEND_ENGLISH;
+                        if(btn_pedge[3])next_state = SEND_CHARACTER;
                     end
                     else begin
                         if(cnt_sysclk <= 80_000_00)begin
@@ -847,17 +849,17 @@ module i2c_txtlcd_top(
                         cnt_data = cnt_data + 1;
                     end
                 end
-                SEND_CHARACTER     :begin
+                SEND_NUMBER     :begin
                     if(busy)begin
-                        if(cnt_data > 9)cnt_data = 0;
+                        if(cnt_number > 9)cnt_number = 0;
                         send = 0;
                         next_state = IDLE;
                     end
                     else if(!send)begin
                         rs =1;
-                        send_buffer = "0" + cnt_data;
+                        send_buffer = "0" + cnt_number;
                         send = 1;
-                        cnt_data = cnt_data + 1;
+                        cnt_number = cnt_number + 1;
                     end
                 end
                 SHIFT_RIGHT_DISPLAY:begin
@@ -882,17 +884,18 @@ module i2c_txtlcd_top(
                         send = 1;
                     end
                 end
-                SEND_ENGLISH     :begin
+                
+                SEND_CHARACTER     :begin
                     if(busy)begin
-                        if(cnt_data > 25)cnt_data = 0;
+                        if(cnt_character > 25)cnt_character = 0;
                         send = 0;
                         next_state = IDLE;
                     end
                     else if(!send)begin
                         rs =1;
-                        send_buffer = "A" + cnt_data;
+                        send_buffer = "A" + cnt_character;
                         send = 1;
-                        cnt_data = cnt_data + 1;
+                        cnt_character = cnt_character + 1;
                     end
                 end
             
@@ -1163,23 +1166,158 @@ module tft_lcd_top_HY(
     // =========================================================
     // 7. FND 출력 (기존 오류 수정)
     // =========================================================
-    wire [15:0] bcd_value;
-    wire [15:0] sec_bcd = 16'h0000; // 원본에서 누락된 sec_bcd 임시 생성
-    bin_to_dec btd_x(.bin(X_Value), .bcd(bcd_value));
+    // wire [15:0] bcd_value;
+    // wire [15:0] sec_bcd = 16'h0000; // 원본에서 누락된 sec_bcd 임시 생성
+    // bin_to_dec btd_x(.bin(X_Value), .bcd(bcd_value));
     
-    FND_cntr fnd(.clk(clk), .reset_p(reset_p), .fnd_value({bcd_value, sec_bcd}), .seg(seg), .com(com));
+    FND_cntr fnd(.clk(clk), .reset_p(reset_p), .hex_value(X_Value), .hex_bcd(0),
+                 .seg(seg), .com(com));
     
+endmodule
+
+
+module adc_ch6_single_top(
+    input clk, reset_p,
+    input vauxp6,vauxn6,
+    output [7:0] seg,
+    output [3:0] com,
+    output [15:0] led);
+
+    wire [4:0] channel_out;
+    wire [15:0] do_out;
+    wire eoc_out, eoc_pedge;
+
+
+    edge_detector_p ed(.clk(clk), .reset_p(reset_p), 
+                       .cp(eoc_out), .p_edge(eoc_pedge));
+
+    
+
+    adc_ch6_single adc_ch6
+        (
+        .daddr_in({2'b00, channel_out}),    // Address bus for the dynamic reconfiguration port
+        .dclk_in(clk),                      // Clock input for the dynamic reconfiguration port
+        .den_in(eoc_out),                   // Enable Signal for the dynamic reconfiguration port
+        .reset_in(reset_p),                 // Reset signal for the System Monitor control logic
+        .vauxp6(vauxp6),                    // Auxiliary channel 6
+        .vauxn6(vauxn6),
+        .channel_out(channel_out),          // Channel Selection Outputs
+        .do_out(do_out),                    // Output data bus for dynamic reconfiguration port
+        .eoc_out(eoc_out)                   // End of Sequence Signal
+        );
+
+    reg [11:0] adc_value;
+    always @(posedge clk, posedge reset_p) begin
+        if (reset_p)adc_value = 0;
+        else if (eoc_pedge)adc_value = {do_out[15:7], 3'b00};
+
+    end
+
+    assign led =
+        (adc_value > 12'd3840) ? 16'b1111_1111_1111_1111 :
+        (adc_value > 12'd3584) ? 16'b0111_1111_1111_1111 :
+        (adc_value > 12'd3328) ? 16'b0011_1111_1111_1111 :
+        (adc_value > 12'd3072) ? 16'b0001_1111_1111_1111 :
+        (adc_value > 12'd2816) ? 16'b0000_1111_1111_1111 :
+        (adc_value > 12'd2560) ? 16'b0000_0111_1111_1111 :
+        (adc_value > 12'd2304) ? 16'b0000_0011_1111_1111 :
+        (adc_value > 12'd2048) ? 16'b0000_0001_1111_1111 :
+        (adc_value > 12'd1792) ? 16'b0000_0000_1111_1111 :
+        (adc_value > 12'd1536) ? 16'b0000_0000_0111_1111 :
+        (adc_value > 12'd1280) ? 16'b0000_0000_0011_1111 :
+        (adc_value > 12'd1024) ? 16'b0000_0000_0001_1111 :
+        (adc_value > 12'd768 ) ? 16'b0000_0000_0000_1111 :
+        (adc_value > 12'd512 ) ? 16'b0000_0000_0000_0111 :
+        (adc_value > 12'd256 ) ? 16'b0000_0000_0000_0011 :
+        (adc_value > 12'd0   ) ? 16'b0000_0000_0000_0001 :
+                                16'b0000_0000_0000_0000;
+
+    FND_cntr fnd(.clk(clk), .reset_p(reset_p), .hex_value(adc_value), .hex_bcd(0),
+                 .seg(seg), .com(com));
+    
+
 endmodule
 
 
 
 
+module adc_ch6_7_sequence_top (
+    input clk, reset_p,
+    input vauxp6, vauxn6, vauxp7, vauxn7,
+    output [7:0] seg,
+    output [3:0] com,
+    output [15:0] led);
+    
+
+    wire [4:0] channel_out;
+    wire [15:0] do_out;
+    wire eoc_out, eoc_pedge;
 
 
+    adc_ch6_7 adc_seq(
+        .daddr_in({2'b00, channel_out}),    // Address bus for the dynamic reconfiguration port
+        .dclk_in(clk),                      // Clock input for the dynamic reconfiguration port
+        .den_in(eoc_out),                   // Enable Signal for the dynamic reconfiguration port
+        .reset_in(reset_p),                 // Reset signal for the System Monitor control logic
+        .vauxp6(vauxp6),                    // Auxiliary channel 6
+        .vauxn6(vauxn6),
+        .vauxp7(vauxp7),                    // Auxiliary channel 7
+        .vauxn7(vauxn7),
+        .channel_out(channel_out),          // Channel Selection Outputs
+        .do_out(do_out),                    // Output data bus for dynamic reconfiguration port
+        .eoc_out(eoc_out)                   // End of Conversion Signal
+    );
+
+    edge_detector_p ed(.clk(clk), .reset_p(reset_p), 
+                       .cp(eoc_out), .p_edge(eoc_pedge));
+    
+    reg [11:0] adc_value_x, adc_value_y;
+    always @(posedge clk, posedge reset_p) begin
+        if (reset_p) begin
+            adc_value_x = 0;
+            adc_value_y = 0;
+        end
+        else if (eoc_pedge) begin
+            case(channel_out[3:0])
+                6: adc_value_x = do_out [15:4];
+                7: adc_value_y = do_out [15:4];
+            endcase
+
+        end
+    end
+
+    wire [7:0] bcd_x, bcd_y;
+    bin_to_dec btd_x(.bin(adc_value_x[11:6]), .bcd(bcd_x));
+    bin_to_dec btd_y(.bin(adc_value_y[11:6]), .bcd(bcd_y));
 
 
+    FND_cntr fnd(.clk(clk), .reset_p(reset_p), .hex_value({bcd_x, bcd_y}), .hex_bcd(1),
+                 .seg(seg), .com(com));
+    
 
+    assign led[15:8] =
+        (adc_value_x[11:6] > 12'd61) ? 8'b0000_0000 :
+        (adc_value_x[11:6] > 12'd53) ? 8'b0000_0001 :
+        (adc_value_x[11:6] > 12'd45) ? 8'b0000_0011 :
+        (adc_value_x[11:6] > 12'd37) ? 8'b0000_0111 :
+        (adc_value_x[11:6] > 12'd29) ? 8'b0000_1111 :
+        (adc_value_x[11:6] > 12'd21) ? 8'b0001_1111 :
+        (adc_value_x[11:6] > 12'd13) ? 8'b0011_1111 :
+        (adc_value_x[11:6] > 12'd5)  ? 8'b0111_1111 :
+                                       8'b1111_1111;
 
+    assign led[7:0] =
+        (adc_value_y[11:6] > 12'd61) ? 8'b1111_1111 :
+        (adc_value_y[11:6] > 12'd53) ? 8'b1111_1110 :
+        (adc_value_y[11:6] > 12'd45) ? 8'b1111_1100 :
+        (adc_value_y[11:6] > 12'd37) ? 8'b1111_1000 :
+        (adc_value_y[11:6] > 12'd29) ? 8'b1111_0000 :
+        (adc_value_y[11:6] > 12'd21) ? 8'b1110_0000 :
+        (adc_value_y[11:6] > 12'd13) ? 8'b1100_0000 :
+        (adc_value_y[11:6] > 12'd5)  ? 8'b1000_0000 :
+                                       8'b0000_0000;
+
+endmodule
 
 
 

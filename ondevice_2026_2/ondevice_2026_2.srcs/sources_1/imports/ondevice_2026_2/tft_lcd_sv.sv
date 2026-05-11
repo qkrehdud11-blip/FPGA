@@ -274,7 +274,7 @@ module lcd_bram
     
     
     
-    reg [WIDTH-1:0] ram [0:DEPTH];
+    reg [WIDTH-1:0] ram [0:DEPTH-1];
     
     always @(posedge wclk)
         if(bram_en)
